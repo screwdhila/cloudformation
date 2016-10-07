@@ -209,7 +209,7 @@
             "IpProtocol": "tcp",
             "FromPort": "80",
             "ToPort": "80",
-            "CidrIp": "0.0.0.0/0"
+            "CidrIp": "101.191.50.33/32"
           } ]
         }
       },
@@ -376,7 +376,7 @@
           "Name" : "myapp",
           "AppSource" : {
             "Type" : "git",
-            "Url" : "https://github.com/screwdhila/myopsworks.git"
+            "Url" : "https://github.com/screwdhila/nodejs-app01.git"
           }
         }
       }
