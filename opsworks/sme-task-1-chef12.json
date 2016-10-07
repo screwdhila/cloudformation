@@ -203,13 +203,13 @@
             "IpProtocol": "tcp",
             "FromPort": "80",
             "ToPort": "80",
-            "CidrIp": "0.0.0.0/0"
+            "CidrIp": "101.191.50.33/32"
           } ],
           "SecurityGroupEgress": [ {
             "IpProtocol": "tcp",
             "FromPort": "80",
             "ToPort": "80",
-            "CidrIp": "101.191.50.33/32"
+            "CidrIp": "0.0.0.0/0"
           } ]
         }
       },
