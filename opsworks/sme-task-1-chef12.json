@@ -1,0 +1,397 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "OpsWorks stack for SME prep - Task-1 use-opsworks-to-deliver-website-application",
+    "Metadata": {
+    },
+    "Parameters": {
+      "ChefVersion" : {
+        "Type" : "String",
+        "Default" : "11.10",
+        "AllowedValues" : [ "11.10", "12"]
+      },
+      "KeyPair" : {
+        "Type" : "AWS::EC2::KeyPair::KeyName"
+      }
+    },
+    "Mappings": {
+      "mySubnets": {
+        "VPC": { "CIDR": "192.168.0.0/16" },
+        "Public1": { "CIDR": "192.168.10.0/24" },
+        "Private1": { "CIDR": "192.168.100.0/24" }
+      }
+    },
+    "Conditions": {
+      "IsChef12": {
+        "Fn::Equals": [
+          {
+            "Ref": "ChefVersion"
+          },
+          "12"
+        ]
+      },
+      "IsChef11": {
+        "Fn::Equals": [
+          {
+            "Ref": "ChefVersion"
+          },
+          "11.10"
+        ]
+      }
+    },
+    "Resources": {
+      "myVPC": {
+        "Type": "AWS::EC2::VPC",
+        "Properties": {
+          "CidrBlock": {
+            "Fn::FindInMap": [
+              "mySubnets",
+              "VPC",
+              "CIDR"
+            ]
+          },
+          "EnableDnsHostnames" : "true",
+          "EnableDnsSupport" : "true"
+        }
+      },
+      "myIGW": {
+        "Type": "AWS::EC2::InternetGateway"
+      },
+      "attachIGWVPC": {
+        "Type": "AWS::EC2::VPCGatewayAttachment",
+        "Properties": {
+          "VpcId": {
+            "Ref": "myVPC"
+          },
+          "InternetGatewayId": {
+            "Ref": "myIGW"
+          }
+        }
+      },
+      "myPublicRT": {
+        "Type": "AWS::EC2::RouteTable",
+        "Properties": {
+          "VpcId": {
+            "Ref": "myVPC"
+          }
+        }
+      },
+      "myPublicRoute": {
+        "Type": "AWS::EC2::Route",
+        "DependsOn" : "attachIGWVPC" ,
+        "Properties": {
+          "RouteTableId": {
+            "Ref": "myPublicRT"
+          },
+          "GatewayId": {
+            "Ref": "myIGW"
+          },
+          "DestinationCidrBlock": "0.0.0.0/0"
+        }
+      },
+
+      "myPublicSubnet1": {
+        "Type": "AWS::EC2::Subnet",
+        "Properties": {
+          "CidrBlock": {
+            "Fn::FindInMap": [
+              "mySubnets",
+              "Public1",
+              "CIDR"
+            ]
+          },
+          "VpcId": {
+            "Ref": "myVPC"
+          },
+          "AvailabilityZone": {
+            "Fn::Select" : [
+              "0",
+              {
+                "Fn::GetAZs" : { "Ref" : "AWS::Region" }
+              }
+            ]
+          }
+        }
+      },
+      "gluePubRTPubSN1": {
+        "Type": "AWS::EC2::SubnetRouteTableAssociation",
+        "Properties": {
+          "RouteTableId": {
+            "Ref": "myPublicRT"
+          },
+          "SubnetId": {
+            "Ref": "myPublicSubnet1"
+          }
+        }
+      },
+
+      "OWInstanceRole": {
+         "Type": "AWS::IAM::Role",
+         "Properties": {
+            "AssumeRolePolicyDocument": {
+               "Version" : "2012-10-17",
+               "Statement": [ {
+                  "Effect": "Allow",
+                  "Principal": {
+                     "Service": [ "ec2.amazonaws.com" ]
+                  },
+                  "Action": [ "sts:AssumeRole" ]
+               } ]
+            },
+            "Path": "/",
+            "Policies": [ {
+               "PolicyName": "OWInstancePolicy",
+               "PolicyDocument": {
+                  "Version" : "2012-10-17",
+                  "Statement": [ {
+                     "Effect": "Allow",
+                     "Action": "*",
+                     "Resource": "*"
+                  } ]
+               }
+               } ]
+            }
+      },
+      "OWInstanceProfile": {
+         "Type": "AWS::IAM::InstanceProfile",
+         "Properties": {
+            "Path": "/",
+            "Roles": [ {
+               "Ref": "OWInstanceRole"
+            } ]
+         }
+      },
+      "ELBAttachment" : {
+        "Type" : "AWS::OpsWorks::ElasticLoadBalancerAttachment",
+        "Properties" : {
+          "ElasticLoadBalancerName" : { "Ref" : "ELB" },
+          "LayerId" : {
+            "Fn::If" : [
+              "IsChef12",
+              { "Ref" : "myLayer12"},
+              { "Ref" : "myLayer11"}
+            ]
+          }
+        }
+      },
+      "ELB" : {
+        "Type": "AWS::ElasticLoadBalancing::LoadBalancer",
+        "DependsOn": "myVPC",
+        "Properties": {
+          "Subnets" : [ { "Ref" : "myPublicSubnet1" } ],
+          "SecurityGroups" : [ { "Ref" : "ELBSecurityGroup" } ],
+          "Listeners": [{
+            "LoadBalancerPort": "80",
+            "InstancePort": "80",
+            "Protocol": "HTTP",
+            "InstanceProtocol": "HTTP"
+          }],
+          "HealthCheck": {
+            "Target": "HTTP:80/",
+            "HealthyThreshold": "2",
+            "UnhealthyThreshold": "10",
+            "Interval": "30",
+            "Timeout": "5"
+          }
+        }
+      },
+      "ELBSecurityGroup": {
+        "Type": "AWS::EC2::SecurityGroup",
+        "Properties": {
+          "GroupDescription" : "Allow inbound access to the ELB",
+          "VpcId": { "Ref": "myVPC" },
+          "SecurityGroupIngress": [ {
+            "IpProtocol": "tcp",
+            "FromPort": "80",
+            "ToPort": "80",
+            "CidrIp": "0.0.0.0/0"
+          } ],
+          "SecurityGroupEgress": [ {
+            "IpProtocol": "tcp",
+            "FromPort": "80",
+            "ToPort": "80",
+            "CidrIp": "0.0.0.0/0"
+          } ]
+        }
+      },
+      "InstanceSG" : {
+        "Type" : "AWS::EC2::SecurityGroup",
+        "Properties": {
+          "VpcId" : { "Ref" : "myVPC" },
+          "GroupDescription" : "Instance SG"
+        }
+      },
+      "ELBtoInstance": {
+        "Type" : "AWS::EC2::SecurityGroupIngress",
+        "Properties": {
+            "GroupId" : { "Ref" : "InstanceSG" },
+            "IpProtocol" : "tcp",
+            "ToPort" : "80",
+            "FromPort" : "80",
+            "SourceSecurityGroupId" : { "Ref" : "ELBSecurityGroup" }
+        }
+      },
+      "myOWStack" : {
+        "Type" : "AWS::OpsWorks::Stack",
+        "Properties" : {
+          "Name" : {
+            "Fn::Join" : [
+              "_",
+              [
+                { "Ref": "AWS::StackName" },
+                "mySMEOWStack"
+              ]
+            ]
+          },
+          "ConfigurationManager" : {
+            "Name" : "Chef",
+            "Version" : { "Ref" : "ChefVersion" }
+          },
+          "DefaultAvailabilityZone" : {
+            "Fn::Select" : [
+              "0",
+              {
+                "Fn::GetAZs" : { "Ref" : "AWS::Region" }
+              }
+            ]
+          },
+          "DefaultOs" : "Amazon Linux 2016.09",
+          "UseCustomCookbooks": "true",
+          "DefaultSshKeyName" : { "Ref" : "KeyPair" },
+          "CustomJson" : {
+            "Fn::Join" : [
+              "",
+              [
+              "{",
+              "\"opsworks\": {",
+              "  \"data_bags\": {",
+              "      \"mybag1\": {",
+              "         \"myitem1\": {",
+              "              \"type\" : \"donut\",",
+              "              \"name\" : \"cake\",",
+              "              \"image\" : {",
+              "                  \"url\": \"images/0001.jpg\",",
+              "                  \"width\": 200,",
+              "                  \"height\": 200",
+              "           }",
+              "         }",
+              "      }",
+              "  }",
+              "}",
+              "}"
+            ]
+          ]
+          },
+          "CustomCookbooksSource" : {
+            "Type" : "git",
+            "Url" : "https://github.com/screwdhila/cookbooks.git"
+          },
+          "DefaultRootDeviceType" : "ebs",
+          "DefaultSubnetId" : { "Ref" : "myPublicSubnet1" },
+          "HostnameTheme" : "Legendary_creatures_from_Japan",
+          "ServiceRoleArn": {
+            "Fn::Join": [
+              "",
+              [
+                "arn:aws:iam::",
+                { "Ref": "AWS::AccountId" },
+                ":role/aws-opsworks-service-role" ]
+            ]
+          },
+          "DefaultInstanceProfileArn" : { "Fn::GetAtt" : [ "OWInstanceProfile", "Arn" ] },
+          "UseOpsworksSecurityGroups" : "true",
+          "VpcId" : { "Ref": "myVPC" }
+        }
+      },
+      "myLayer11": {
+        "Type": "AWS::OpsWorks::Layer",
+        "Condition" : "IsChef11",
+        "DependsOn": "myApp",
+        "Properties": {
+          "StackId": {"Ref": "myOWStack"},
+          "Type": "nodejs-app",
+          "Shortname" : "nodejs-app",
+          "EnableAutoHealing" : "true",
+          "AutoAssignElasticIps" : "false",
+          "AutoAssignPublicIps" : "true",
+          "Name": "MyNodeJSLayer-11",
+          "CustomSecurityGroupIds": [ {"Ref": "InstanceSG"}]
+        }
+      },
+      "myLayer12": {
+        "Type": "AWS::OpsWorks::Layer",
+        "Condition" : "IsChef12",
+        "Properties": {
+          "StackId": {"Ref": "myOWStack"},
+          "Type": "custom",
+          "EnableAutoHealing" : "true",
+          "AutoAssignElasticIps" : "false",
+          "AutoAssignPublicIps" : "true",
+          "Name": "MyNodeJSLayer-12",
+          "Shortname" : "mylayer12",
+          "CustomRecipes" : {
+            "Configure" : [ "mycookbook::configure" ],
+            "Setup" : [ "mycookbook::setup" ],
+            "Deploy" : [ "mycookbook::deploy" ],
+            "Shutdown" : [],
+            "Undeploy" : []
+          },
+          "CustomSecurityGroupIds": [ {"Ref": "InstanceSG"}]
+        }
+      },
+      "myAppInstance1": {
+        "Type": "AWS::OpsWorks::Instance",
+        "Properties": {
+          "StackId": {"Ref": "myOWStack"},
+          "LayerIds": [ {
+            "Fn::If" : [
+              "IsChef12",
+              { "Ref" : "myLayer12"},
+              { "Ref" : "myLayer11"}
+            ]
+            }
+          ],
+          "InstanceType": "t2.medium",
+          "AvailabilityZone" : {
+            "Fn::Select" : [
+              "0",
+              {
+                "Fn::GetAZs" : { "Ref" : "AWS::Region" }
+              }
+            ]
+          }
+        }
+      },
+      "myApp" : {
+        "Type" : "AWS::OpsWorks::App",
+        "Condition" : "IsChef11",
+        "Properties" : {
+          "StackId" : {"Ref":"myOWStack"},
+          "Type" : {
+            "Fn::If" : [
+              "IsChef11",
+              "nodejs",
+              "other"
+            ]
+          },
+          "Name" : "myapp",
+          "AppSource" : {
+            "Type" : "git",
+            "Url" : "https://github.com/screwdhila/myopsworks.git"
+          }
+        }
+      }
+    },
+    "Outputs": {
+      "VPCId" : {
+        "Description" : "VPC ID",
+        "Value" :  { "Ref" : "myVPC" }
+      },
+      "PublicSubnet" : {
+        "Description" : "The subnet ID to use for public web servers",
+        "Value" :  { "Ref" : "myPublicSubnet1" }
+      },
+      "ELB" : {
+        "Value" : { "Fn::GetAtt" : [ "ELB", "DNSName" ] }
+      }
+    }
+}
